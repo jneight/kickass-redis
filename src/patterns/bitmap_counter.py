@@ -59,7 +59,7 @@ class BitmapCounter(Rediston):
 
 
 
-    def __init__(self, metricName, timeResolutions=(86400,), snapWeekTo=SNAP_SUNDAY, timeZone=TZ_GMT, idMapper=None):
+    def __init__(self, metricName, timeResolutions=(86400,), snapWeekTo=SNAP_MONDAY, timeZone=TZ_GMT, idMapper=None):
         """
         Constructor
         @param metricName the name of the metric we're sampling, to be used as the redis key
@@ -79,7 +79,6 @@ class BitmapCounter(Rediston):
         """
         Get the redis key for this object, for internal use
         """
-        
         snap = 0
         resolution = resolution or self.timeResolutions[0]
         if resolution == self.RES_WEEK:
@@ -95,7 +94,21 @@ class BitmapCounter(Rediston):
         @param timestamp the event time, defaults to now
         """
 
-        #map to a sequential id if needed
+        self.set(
+            objectId=objectId,
+            value=1,
+            timestamp=timestamp,
+            sequentialIdMappingPrefix=sequentialIdMappingPrefix)
+
+    def set(self, objectId, value=0, timestamp=None, sequentialIdMappingPrefix=None):
+        """
+        Set one sample (set to 0).
+        TODO: enable multiple samples in one pipeline
+        @param objectId an integer of the object's id. NOTE: do not use this on huge numbers
+        @param timestamp the event time, defaults to now
+        """
+
+        # map to a sequential id if needed
         if self.idMapper:
             objectId = self.idMapper.getSequentialId(objectId)
 
@@ -105,7 +118,7 @@ class BitmapCounter(Rediston):
         keys = [self.getKey(timestamp, res) for res in self.timeResolutions]
         pipe = self._getPipeline()
         #set the bits
-        [pipe.setbit(key, int(objectId), 1) for key in keys]
+        [pipe.setbit(key, int(objectId), value) for key in keys]
         pipe.execute()
 
     def isSet(self, objectId, timestamp, timeResolution=None):
@@ -133,7 +146,18 @@ class BitmapCounter(Rediston):
         [pipe.execute_command('BITCOUNT', self.getKey(timestamp, timeResolution)) for timestamp in timestamps]
         return zip(timestamps, pipe.execute())
 
+    def delMap(self, timestamps, timeResolution=None):
+        """
+        Delete BitmapCounter.
+        @param timestamps a list of timestamps to delete.
+        @param timeResolution the time slot to delete, defaults to the first resolution given to the counter.
+        @return a list of [(timestamp, status), ...]
+        """
+        timeResolution = timeResolution or self.timeResolutions[0]
+        pipe = self._getPipeline()
 
+        [pipe.execute_command('DEL', self.getKey(timestamp, timeResolution)) for timestamp in timestamps]
+        return zip(timestamps, pipe.execute())
 
     def aggregateCounts(self, timestamps, op=OP_TOTAL, timeResolution=None, expire=True):
         """
